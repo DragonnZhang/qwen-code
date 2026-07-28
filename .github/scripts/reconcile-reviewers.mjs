@@ -72,7 +72,6 @@ export function reconcile({ desired, reviewed, current, markerBody, maintainers 
   );
 
   const driftSet = new Set(drift);
-  const preDriftDesired = effectiveDesired;
   const finalDesired = effectiveDesired.filter((r) => !driftSet.has(r)).sort();
 
   const maintainerSet = new Set(maintainers);
@@ -84,7 +83,7 @@ export function reconcile({ desired, reviewed, current, markerBody, maintainers 
   const toAdd = finalDesired.filter((r) => !managedSet.has(r));
   const unchanged = toRemove.length === 0 && toAdd.length === 0;
 
-  const newMarkerBody = `${MARKER} {"desired":${JSON.stringify(preDriftDesired)}} -->`;
+  const newMarkerBody = `${MARKER} {"desired":${JSON.stringify([...desired].sort())}} -->`;
 
   return { toAdd, toRemove, unchanged, markerBody: newMarkerBody };
 }

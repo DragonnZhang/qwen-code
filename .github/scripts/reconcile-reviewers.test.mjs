@@ -170,20 +170,57 @@ describe('reconcile', () => {
     assert.equal(result.unchanged, false);
   });
 
-  it('persists pre-drift desired in the marker body', () => {
+  it('persists the full desired set in the marker body', () => {
     const result = reconcile({
       desired: ['wenshao', 'tanzhenxin'],
-      reviewed: [],
+      reviewed: ['wenshao'],
       current: ['tanzhenxin'],
       markerBody: `${MARKER} {"desired":["tanzhenxin","wenshao"]} -->`,
       maintainers: MAINTAINERS,
     });
-    // wenshao is drift (dismissed), so final desired is just tanzhenxin,
-    // but the marker records the pre-drift set for future drift detection.
     assert.deepEqual(result.toAdd, []);
     assert.deepEqual(result.toRemove, []);
     const parsed = parseMarker(result.markerBody);
     assert.deepEqual(parsed, ['tanzhenxin', 'wenshao']);
+  });
+
+  it('marker retains reviewed users across runs (no silent loss)', () => {
+    // Run 1: first run, desired=[wenshao,tanzhenxin], both requested.
+    const run1 = reconcile({
+      desired: ['wenshao', 'tanzhenxin'],
+      reviewed: [],
+      current: [],
+      markerBody: '',
+      maintainers: MAINTAINERS,
+    });
+    assert.deepEqual(run1.toAdd, ['tanzhenxin', 'wenshao']);
+
+    // wenshao submits a review; GitHub removes them from requested_reviewers.
+    // Run 2: desired unchanged, wenshao now in reviewed.
+    const run2 = reconcile({
+      desired: ['wenshao', 'tanzhenxin'],
+      reviewed: ['wenshao'],
+      current: ['tanzhenxin'],
+      markerBody: run1.markerBody,
+      maintainers: MAINTAINERS,
+    });
+    assert.equal(run2.unchanged, true);
+    // Marker must still contain the full desired set, not just [tanzhenxin].
+    assert.deepEqual(parseMarker(run2.markerBody), ['tanzhenxin', 'wenshao']);
+
+    // tanzhenxin is manually dismissed.
+    // Run 3: drift detection needs the full prevDesired to see the dismissal.
+    const run3 = reconcile({
+      desired: ['wenshao', 'tanzhenxin'],
+      reviewed: ['wenshao'],
+      current: [],
+      markerBody: run2.markerBody,
+      maintainers: MAINTAINERS,
+    });
+    // tanzhenxin is drift (dismissed, not reviewed) — respect the manual removal.
+    assert.deepEqual(run3.toAdd, []);
+    assert.deepEqual(run3.toRemove, []);
+    assert.equal(run3.unchanged, true);
   });
 
   it('CLI produces valid JSON output', () => {
