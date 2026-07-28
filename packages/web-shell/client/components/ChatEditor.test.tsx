@@ -27,12 +27,82 @@ const mockComposerCoreState = vi.hoisted(() => ({
   removeTopTag: vi.fn(),
 }));
 
+// Mock useWorkspace so BranchPickerPopover can render without a real provider.
+vi.mock('@qwen-code/webui/daemon-react-sdk', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@qwen-code/webui/daemon-react-sdk')>();
+  return {
+    ...actual,
+    useWorkspace: () => ({
+      client: {
+        workspaceGitBranches: vi.fn().mockResolvedValue({
+          v: 1,
+          local: [],
+          remote: [],
+          tags: [],
+          recent: [],
+          head: 'main',
+          detached: false,
+        }),
+        workspaceGitCheckout: vi.fn().mockResolvedValue(undefined),
+        workspaceGitCreateBranch: vi.fn().mockResolvedValue(undefined),
+        workspaceGitPush: vi
+          .fn()
+          .mockResolvedValue({ success: true, output: '' }),
+        workspaceGitPull: vi
+          .fn()
+          .mockResolvedValue({ success: true, output: '' }),
+        workspaceByCwd: () => ({
+          workspaceGit: vi.fn().mockResolvedValue({
+            v: 2,
+            branch: 'main',
+            detached: false,
+            staged: 0,
+            unstaged: 0,
+            untracked: 0,
+            conflicted: 0,
+            hasUpstream: false,
+            ahead: 0,
+            behind: 0,
+            stashCount: 0,
+            operation: null,
+            computedAt: 0,
+          }),
+          workspaceGitBranches: vi.fn().mockResolvedValue({
+            v: 1,
+            local: [],
+            remote: [],
+            tags: [],
+            recent: [],
+            head: 'main',
+            detached: false,
+          }),
+          workspaceGitCheckout: vi.fn().mockResolvedValue(undefined),
+          workspaceGitCreateBranch: vi.fn().mockResolvedValue(undefined),
+          workspaceGitPush: vi
+            .fn()
+            .mockResolvedValue({ success: true, output: '' }),
+          workspaceGitPull: vi
+            .fn()
+            .mockResolvedValue({ success: true, output: '' }),
+          listWorkspaceSessions: vi.fn().mockResolvedValue([]),
+        }),
+      },
+      capabilities: { features: [] },
+    }),
+  };
+});
+
 const composerCoreState = vi.hoisted(() => ({
   slashMenu: null as SlashMenuState | null,
   focus: vi.fn(),
   closeSlashMenu: vi.fn(),
   mobileComposer: null as unknown,
   openHistorySearch: vi.fn(),
+}));
+
+const voiceButtonState = vi.hoisted(() => ({
+  onActiveChange: undefined as ((active: boolean) => void) | undefined,
 }));
 
 Object.defineProperty(window, 'matchMedia', {
@@ -125,7 +195,14 @@ vi.mock('../hooks/useComposerCore', async (importOriginal) => {
 });
 
 vi.mock('../voice/VoiceButton', () => ({
-  VoiceButton: () => <span data-testid="voice-button" />,
+  VoiceButton: ({
+    onActiveChange,
+  }: {
+    onActiveChange?: (active: boolean) => void;
+  }) => {
+    voiceButtonState.onActiveChange = onActiveChange;
+    return <span data-testid="voice-button" />;
+  },
 }));
 
 const mounted: Array<{
@@ -140,6 +217,7 @@ afterEach(() => {
   composerCoreState.closeSlashMenu.mockReset();
   composerCoreState.mobileComposer = null;
   composerCoreState.openHistorySearch.mockReset();
+  voiceButtonState.onActiveChange = undefined;
   for (const { root, container, portalRoot } of mounted.splice(0)) {
     act(() => root.unmount());
     container.remove();
@@ -817,6 +895,43 @@ describe('ChatEditor mobile composer quick actions', () => {
           (button) => button.textContent === 'Tab',
         ),
       ).toBe(true);
+    });
+  });
+
+  it('hides other toolbar actions while mobile voice capture is active', () => {
+    withTouchDevice(() => {
+      const container = renderChatEditor({
+        currentModel: 'qwen-test',
+        availableModels: [{ id: 'qwen-test' }],
+      });
+
+      expect(
+        container.querySelector('[data-web-shell-toolbar-leading]'),
+      ).toBeTruthy();
+      expect(
+        container.querySelector(
+          'button[aria-label="more actions"][data-hide-during-mobile-voice]',
+        ),
+      ).toBeTruthy();
+      expect(
+        container.querySelector('[data-web-shell-composer-submit]'),
+      ).toBeTruthy();
+
+      act(() => {
+        voiceButtonState.onActiveChange?.(true);
+      });
+
+      expect(
+        container.querySelector('[data-mobile-voice-active="true"]'),
+      ).toBeTruthy();
+
+      act(() => {
+        voiceButtonState.onActiveChange?.(false);
+      });
+
+      expect(
+        container.querySelector('[data-mobile-voice-active="true"]'),
+      ).toBeFalsy();
     });
   });
 });

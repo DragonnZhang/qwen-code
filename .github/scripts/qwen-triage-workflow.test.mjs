@@ -21,6 +21,17 @@ const workflowPath = join(
   'qwen-triage.yml',
 );
 const doc = parse(readFileSync(workflowPath, 'utf8'));
+const prWorkflowPath = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  '.qwen',
+  'skills',
+  'triage',
+  'references',
+  'pr-workflow.md',
+);
+const prSkill = readFileSync(prWorkflowPath, 'utf8');
 const triageJob = doc.jobs.triage;
 const steps = triageJob.steps;
 const triageStep = steps.find((s) => s.id === 'triage');
@@ -43,7 +54,10 @@ describe('qwen-triage: agent tool/permission settings', () => {
   it('settings is valid JSON that restricts the toolset', () => {
     const settings = JSON.parse(triageStep.with.settings);
     const core = settings.tools?.core;
-    assert.ok(Array.isArray(core), 'tools.core must be an array (registration allowlist)');
+    assert.ok(
+      Array.isArray(core),
+      'tools.core must be an array (registration allowlist)',
+    );
     for (const t of [
       'run_shell_command',
       'read_file',
@@ -122,6 +136,52 @@ describe('qwen-triage: git exec-vector cleanup', () => {
     );
   });
 
+  // Steady-state regression: on a reused runner this step has already
+  // sanitized the config, so the next run's grep matches nothing and exits 1.
+  // Under the Actions default `bash -e` shell plus the script's own
+  // `set -o pipefail`, an unguarded grep killed the whole step exactly when
+  // there was nothing to clean (run 30095456731). The allowlist test below
+  // can't catch this: it re-assembles the pipeline without the shell flags
+  // and always plants non-allowlisted keys. So run the *actual* step script
+  // under the actual flags against the nothing-to-clean state.
+  describe('steady state: nothing to clean (real step script, bash -e)', () => {
+    // The stage-draft cleanup touches a literal /tmp glob; neuter that one
+    // line so the test never deletes files outside its scratch dir.
+    const hermetic = cleanStep.run.replace(/^rm -f \/tmp\/stage-[^\n]*$/m, ':');
+    let dir;
+
+    before(() => {
+      assert.notEqual(hermetic, cleanStep.run, 'stage-draft rm line not found');
+      dir = mkdtempSync(join(tmpdir(), 'triage-steady-'));
+      spawnSync('git', ['-C', dir, 'init', '-q']);
+    });
+
+    after(() => dir && rmSync(dir, { recursive: true, force: true }));
+
+    const runStep = (script) =>
+      spawnSync('bash', ['-e', '-c', script], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { ...process.env, RUNNER_TEMP: join(dir, 'rt') },
+      });
+
+    it('succeeds when every config key is already allowlisted', () => {
+      const res = runStep(hermetic);
+      assert.equal(res.status, 0, res.stderr || res.stdout);
+      assert.match(res.stdout, /stale agent state cleaned/);
+    });
+
+    it('negative control: without the grep guard the same state kills the step', () => {
+      const unguarded = hermetic.replace(' || true; }', '; }');
+      assert.notEqual(
+        unguarded,
+        hermetic,
+        'grep guard (`|| true`) not found in clean step',
+      );
+      assert.notEqual(runStep(unguarded).status, 0);
+    });
+  });
+
   // Behavioral test: run the workflow's *actual* allowlist pattern (extracted
   // from the step) against a scratch repo. Proves the regex both unsets exec
   // vectors and preserves the plumbing actions/checkout needs — a broken
@@ -176,9 +236,13 @@ describe('qwen-triage: git exec-vector cleanup', () => {
     after(() => dir && rmSync(dir, { recursive: true, force: true }));
 
     const remaining = () =>
-      spawnSync('git', ['-C', dir, 'config', '--local', '--name-only', '--list'], {
-        encoding: 'utf8',
-      }).stdout.toLowerCase();
+      spawnSync(
+        'git',
+        ['-C', dir, 'config', '--local', '--name-only', '--list'],
+        {
+          encoding: 'utf8',
+        },
+      ).stdout.toLowerCase();
 
     for (const vec of [
       'hookspath',
@@ -211,5 +275,33 @@ describe('qwen-triage: git exec-vector cleanup', () => {
         assert.match(remaining(), new RegExp(kept.replace(/\./g, '\\.')));
       });
     }
+  });
+});
+
+describe('qwen-triage: Stage 1e revert-pattern signals', () => {
+  it('includes high-risk path detection', () => {
+    assert.ok(prSkill.includes('1e. High-risk path'));
+    assert.ok(prSkill.includes('openaiContentGenerator'));
+    assert.ok(prSkill.includes('streamingToolCallParser'));
+    assert.ok(prSkill.includes('geminiChat'));
+    assert.ok(prSkill.includes('acpConnection'));
+    assert.ok(prSkill.includes('(^|/)shell\\.ts$'));
+    assert.ok(prSkill.includes('shellExecutionService'));
+    assert.ok(prSkill.includes('mcp-client'));
+    assert.ok(prSkill.includes('mcp-pool'));
+    assert.ok(prSkill.includes('LspServer'));
+    assert.ok(prSkill.includes('acp-integration'));
+    assert.ok(prSkill.includes('(^|/)relaunch\\.ts$'));
+    assert.ok(prSkill.includes('(^|/)sandbox\\.ts$'));
+    assert.ok(prSkill.includes('electron-run-as-node'));
+    assert.ok(prSkill.includes('p = 0.006'));
+    assert.ok(prSkill.includes('do not skip any Stage 2 enrichment'));
+    assert.ok(prSkill.includes('gh api --paginate'));
+    assert.ok(prSkill.includes('|| true'));
+    assert.ok(prSkill.includes('WARNING: could not fetch PR files'));
+  });
+
+  it('includes Risk field in the Stage 1 comment template', () => {
+    assert.ok(prSkill.includes('Risk: <if Stage 1e matched'));
   });
 });
